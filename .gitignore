@@ -1,0 +1,24 @@
+# Sensitive Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Node Dependencies
+node_modules/
+.next/
+out/
+build/
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+
+# Local Vector Databases & Logs
+backend/chroma_data/
+*.log
+.DS_Store

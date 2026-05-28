@@ -1,0 +1,4 @@
+Question,Retrieved Chunks Count,Generated Answer,Expected Truth,Faithfulness Score
+What is the primary goal of Project Emerald?,1,The primary goal of Project Emerald is to migrate all local text vector processing over to an optimized cluster architecture using custom Python daemons.,To migrate all local text vector processing over to an optimized cluster architecture using custom Python daemons.,1
+When was Project Emerald launched?,1,Project Emerald was launched in May 2026.,May 2026.,1
+What is the capital of France?,1,I do not possess that information based on the current knowledge base.,This information is not present in the knowledge base.,1
