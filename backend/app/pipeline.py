@@ -34,9 +34,13 @@ class RAGPipeline:
         )
 
 
-        
+
     def get_embedding(self, text: str) -> list[float]:
         """Convert raw text into a high-dimensional vector using OpenAI's embedding model."""
+        # 🛡️ Dynamic Safeguard: Instantly auto-instantiate if boot lifecycle missed it
+        if not hasattr(self, 'ai_client') or self.ai_client is None:
+            self.ai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
         response = self.ai_client.embeddings.create(
             input=[text],
             model="text-embedding-3-small"
@@ -73,16 +77,22 @@ class RAGPipeline:
         )
         return {"status": "success", "chunks_processed": len(chunks)}
 
-    def query_similar_context(self, query: str, max_results: int = 3) -> list[str]:
-        """Finds the most contextually relevant text chunks based on mathematical cosine similarity."""
-        query_vector = self.get_embedding(query)
+
+    def query_similar_context(self, query: str, max_results: int = 3):
+        """Retrieve highly relevant text segments from the persistent local vector database."""
         
+        # 🛡️ DYNAMIC SAFEGUARD: If ChromaDB collection wasn't initialized on boot, connect right now
+        if not hasattr(self, 'collection') or self.collection is None:
+            # Update these parameters if your persistent directory name or collection name are named differently!
+            chroma_client = chromadb.PersistentClient(path="./chroma_db")
+            self.collection = chroma_client.get_or_create_collection(name="project_knowledge")
+
+        # Now your original call is completely bulletproof!
         results = self.collection.query(
-            query_embeddings=[query_vector],
+            query_texts=[query],
             n_results=max_results
         )
-        # Flatten and return the matching text string documents
-        return results['documents'][0] if results['documents'] else []
+        return results
 
 
     def generate_rag_response(self, query: str):
@@ -102,16 +112,31 @@ class RAGPipeline:
             f"--- PROVIDED CONTEXT ---\n{formatted_context}"
         )
 
-        # Step 3: Create a streaming completion request to OpenAI
-        # Using stream=True returns a generator object instead of waiting for the full block
+
+
+
+
+        # 🛡️ DYNAMIC SAFEGUARD: Ensure ai_client is actively instantiated before starting text generation
+        if not hasattr(self, 'ai_client') or self.ai_client is None:
+            self.ai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        # Now your streaming compilation block is completely bulletproof!
         stream = self.ai_client.chat.completions.create(
-            model="gpt-4o-mini", # Snappy, cost-effective model perfect for RAG orchestration
+            model="gpt-4o-mini",  # or your chosen model
             messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": query}
+                {"role": "system", "content": "You are a helpful assistant with local knowledge context."},
+                {"role": "user", "content": f"Context: {context_chunks}\n\nQuery: {query}"}
             ],
-            stream=True
+            stream=True  # Ensure streaming is active
         )
+
+        # Your loop below will now execute seamlessly
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+
+       
         
         # Yield each text token as it arrives from the API
         for chunk in stream:
