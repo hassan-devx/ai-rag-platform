@@ -2,12 +2,16 @@ from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from app.pipeline import RAGPipeline
+from app.pipeline import pipeline
 from app.tools import AVAILABLE_TOOLS, MAP_TOOLS
 from openai import OpenAI
 import os
 import json
 from app.auth import create_access_token, verify_token, ADMIN_PASSWORD
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(
      title="TheImageBuilder Core AI Engine",
@@ -25,7 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-pipeline = RAGPipeline()
+pipeline = pipeline
 
 class LoginRequest(BaseModel):
     password: str
@@ -82,16 +86,29 @@ async def search_context(payload: QueryPayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/chat", dependencies=[Depends(verify_token)])
-async def chat_stream(payload: QueryPayload):
-    try:
-        # We return a StreamingResponse which takes our Python generator method
-        return StreamingResponse(
-            pipeline.generate_rag_response(query=payload.prompt),
-            media_type="text/plain"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+
+from typing import Optional
+from pydantic import BaseModel, Field
+from fastapi.responses import StreamingResponse
+
+# 1. Update the Pydantic schema keys to match the incoming payload
+class ChatRequest(BaseModel):
+    prompt: str  # ◄── Changed from 'message' to 'prompt' to match your frontend perfectly!
+    session_id: Optional[str] = Field(default="default_session")
+
+    class Config:
+        extra = "allow"
+
+# 2. Update the chat route to process the synchronized fields
+@app.post("/chat")
+async def chat_endpoint(request: ChatRequest):
+    # Pass request.prompt down into your RAG pipeline streaming engine
+    return StreamingResponse(
+        pipeline.generate_rag_response(query=request.prompt, session_id=request.session_id),
+        media_type="text/event-stream"
+    )
+   
 
 
 async def generate_rag_response(self, query: str):
@@ -213,38 +230,69 @@ async def run_agent_loop(payload: QueryPayload):
 # Ensure you import your existing token validation method
 # from .auth import verify_token 
 
-@app.post("/api/admin/ingest-file", dependencies=[Depends(verify_token)])
-async def ingest_file_stream(file: UploadFile = File(...)):
-    """Accept incoming file bytes, extract plain text strings, and vector cache."""
+@app.post("/api/admin/ingest-file") # ◄── Clean decorator without the dependencies=[] parameter
+async def ingest_file_stream(
+    file: UploadFile = File(...), 
+    current_user: dict = Depends(verify_token) # ◄── Injected right here instead!
+):
     try:
-        # Validate file extensions securely
         extension = file.filename.split(".")[-1].lower()
         if extension not in ["txt", "md"]:
-            raise HTTPException(
-                status_code=400, 
-                detail="Unsupported extension layer. Please restrict documents to .txt or .md parameters."
-            )
+            raise HTTPException(status_code=400, detail="Unsupported extension layer.")
 
-        # Extract file byte streams asynchronously
         file_bytes = await file.read()
         raw_text = file_bytes.decode("utf-8")
 
         if not raw_text.strip():
-            raise HTTPException(status_code=400, detail="Document appears completely void of data context.")
+            raise HTTPException(status_code=400, detail="Document appears empty.")
 
-        # Stream text blocks directly to your resilient ChromaDB self-healing pipeline function
-        # pipeline.add_to_vector_store(text_content=raw_text, source=file.filename)
+        # Stream text blocks directly to your pipeline
+        pipeline.add_to_vector_store(text_content=raw_text, source=file.filename)
         
         return {
             "status": "success",
             "filename": file.filename,
             "message": "Content cleanly extracted and vectorized dynamically."
         }
-
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="Encoding analysis error. Ensure file structure maps cleanly to UTF-8 formats.")
     except Exception as e:
+        # This will catch the error and print it to your uvicorn terminal console!
+        import traceback
+        print("Detailed Ingestion Error Traceback:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Core file execution crash: {str(e)}")
+
+
+
+
+@app.post("/api/admin/reset-index", dependencies=[Depends(verify_token)])
+async def reset_knowledge_index():
+    """Completely wipes out the local ChromaDB collection entries to clear agent memory."""
+    try:
+        import chromadb
+        
+        # Connect to local storage
+        chroma_client = chromadb.PersistentClient(path="./chroma_db")
+        
+        # Delete the collection entirely
+        try:
+            chroma_client.delete_collection(name="project_knowledge")
+        except ValueError:
+            # Handle case where collection doesn't exist yet
+            pass
+            
+        # Re-initialize a fresh, clean 1536-dimension instance shell
+        chroma_client.get_or_create_collection(
+            name="project_knowledge",
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        return {
+            "status": "success",
+            "message": "Persistent vector cache completely flushed. Node index set back to clean baseline."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Index clearing failure: {str(e)}")
+
 
 
 if __name__ == "__main__":

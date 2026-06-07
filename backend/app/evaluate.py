@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from dotenv import load_dotenv
 from openai import OpenAI
-from app.pipeline import RAGPipeline
+from app.pipeline import pipeline
 
 load_dotenv()
 

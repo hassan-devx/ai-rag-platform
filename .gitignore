@@ -22,3 +22,4 @@ __pycache__/
 backend/chroma_data/
 *.log
 .DS_Store
+backend/chroma_db/

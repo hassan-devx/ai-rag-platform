@@ -1,182 +1,221 @@
-"use client";
-import React, { useState, useRef, useEffect } from "react";
+'use client';
+import ReactMarkdown from 'react-markdown';
+import { useState } from "react";
+import { secureFetch } from "@/utils/api";
 
-export default function UserAgentDashboard() {
+export default function Home() {
+  // State management for Chat Hub
   const [messages, setMessages] = useState([
-    { 
-      role: "assistant", 
-      content: "Hello! I am your autonomous assistant. I can search internal project archives or run live web lookups to answer your questions accurately. How can I help you today?" 
-    }
+    { role: "assistant", content: "Hello Hassan! Ask me anything, or feed context into the Developer Console." }
   ]);
   const [input, setInput] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
-  const messagesEndRef = useRef(null);
+  const [loading, setLoading] = useState(false);
+  const [agentStatus, setAgentStatus] = useState(""); 
 
-  // Auto-scrolls the chat window to the newest chunks as they stream in
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSubmit = async (e) => {
+  const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!input.trim() || isStreaming) return;
+    if (!input.trim() || loading) return;
 
-    const userPrompt = input;
+    const userMessage = input;
     setInput("");
-    
-    // 1. Append the user's message to the feed
-    setMessages((prev) => [...prev, { role: "user", content: userPrompt }]);
-    setIsStreaming(true);
+    setLoading(true);
+    setAgentStatus("routing");
 
-    // 2. Append a placeholder message for the assistant stream
-    setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
     try {
-      // Pointing directly to your backend agent loop
-      const response = await fetch("http://127.0.0.1:8000/agent", {
+      const response = await secureFetch("http://127.0.0.1:8000/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: userPrompt }),
+        body: JSON.stringify({ prompt: userMessage, session_id: "hassan_dev_session" }), // Perfectly matching your backend payload
       });
 
-      if (!response.body) {
-        throw new Error("No readable stream response returned from backend.");
+      if (!response.ok) {
+        throw new Error("Failed to connect to the AI Agent stream backend pipeline.");
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let compiledResponse = "";
+      let done = false;
+      let accumulatedResponse = "";
 
-      // 3. Process the streaming chunks from FastAPI dynamically
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
-        const textChunk = decoder.decode(value, { stream: true });
-        compiledResponse += textChunk;
+      while (!done) {
+        const { value, done: doneReading } = await reader.read();
+        done = doneReading;
+        const chunk = decoder.decode(value, { stream: !done });
 
-        // Overwrite the final message item with the accumulating text stream
+        if (chunk.includes("X-STATUS:local_knowledge_search")) {
+          setAgentStatus("local_knowledge_search");
+          continue;
+        } else if (chunk.includes("X-STATUS:live_web_search")) {
+          setAgentStatus("live_web_search");
+          continue;
+        } else if (chunk.includes("X-STATUS:synthesizing")) {
+          setAgentStatus("synthesizing");
+          continue;
+        }
+
+        const cleanChunk = chunk.replace(/X-STATUS:\w+/g, "");
+        accumulatedResponse += cleanChunk;
+
         setMessages((prev) => {
           const updated = [...prev];
-          updated[updated.length - 1].content = compiledResponse;
+          updated[updated.length - 1].content = accumulatedResponse;
           return updated;
         });
       }
+
+      setAgentStatus("");
+
     } catch (error) {
-      console.error("Agent network connection error:", error);
-      setMessages((prev) => {
-        const updated = [...prev];
-        updated[updated.length - 1].content = "⚠️ Failed to establish a streaming connection to the agent backend service. Please check your server status.";
-        return updated;
-      });
+      console.error("Streaming error caught:", error);
+      setAgentStatus("error");
     } finally {
-      setIsStreaming(false);
+      setLoading(false);
     }
   };
 
+
+
   return (
-    <div className="flex h-screen bg-slate-900 text-slate-100 font-sans antialiased">
-      {/* Structural Workspace Sidebar */}
-      <div className="w-64 bg-slate-950 border-r border-slate-800 p-5 flex flex-col justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></div>
-            <h1 className="text-md font-bold tracking-wide uppercase text-slate-300">
-              Agent Core
+    <div className="flex h-screen w-screen bg-slate-950 font-sans text-slate-100 overflow-hidden">
+      
+      {/* ======================================================== */}
+      {/* LEFT SIDEBAR: INTERFACE PLATFORM OPTIONS                 */}
+      {/* ======================================================== */}
+      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between p-4 shrink-0">
+        <div className="space-y-6">
+          <div>
+            <h1 className="text-sm font-bold text-blue-400 uppercase tracking-widest px-2">
+              ImageBuilder OS
             </h1>
+            <p className="text-[10px] text-slate-500 px-2">v1.0.0 Core Active</p>
           </div>
-          <p className="text-xs text-slate-500 mt-1">Autonomous Execution Mode</p>
-          
-          <nav className="mt-8 space-y-2">
-            <div className="px-3 py-2 text-xs font-medium text-emerald-400 bg-emerald-950/40 rounded-md border border-emerald-900/50">
-              💬 Active User Chat
-            </div>
-            <a 
-              href="/admin/dev-console" 
-              className="block px-3 py-2 text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 rounded-md transition"
-            >
-              ⚙️ Developer Panel
+
+          <nav className="space-y-1">
+            <a href="/" className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg bg-slate-800 text-white transition-all">
+              💬 AI Agent Chat Room
+            </a>
+            <a href="/admin/dev-console" className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg text-slate-400 hover:bg-slate-800/50 hover:text-slate-200 transition-all">
+              🛠️ Developer Console
             </a>
           </nav>
         </div>
-        <div className="text-xs text-slate-600 border-t border-slate-800 pt-4">
-          Status: Verified Standalone
-        </div>
-      </div>
 
-      {/* Primary Interaction Interface */}
-      <div className="flex-1 flex flex-col h-full bg-gradient-to-b from-slate-900 to-slate-950">
-        {/* Top Boundary Bar */}
-        <div className="h-14 border-b border-slate-800 flex items-center px-6 justify-between bg-slate-900/50 backdrop-blur-sm">
-          <div className="text-sm font-medium text-slate-400">Secure Client Workspace</div>
-          <div className="text-xs px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-400">
-            Routing: Local DB + Live Web
-          </div>
+        {/* Dynamic Safe Logout Area at the bottom of sidebar */}
+        <div className="pt-4 border-t border-slate-800">
+          <button 
+            onClick={() => {
+              localStorage.removeItem('auth_token');
+              window.location.reload();
+            }} 
+            className="w-full text-left text-xs font-semibold px-3 py-2.5 bg-red-950/30 text-red-400 border border-red-900/40 rounded-lg hover:bg-red-900 hover:text-white transition-all"
+          >
+            ❌ Revoke Token (Log Out)
+          </button>
         </div>
+      </aside>
 
-        {/* Dynamic Chat Feed Window */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl w-full mx-auto">
-          {messages.map((msg, index) => (
+      {/* ======================================================== */}
+      {/* PRIMARY CHAT WINDOW CONTAINER                            */}
+      {/* ======================================================== */}
+      <main className="flex-1 flex flex-col h-full bg-slate-950 relative">
+        
+        {/* Workspace Subheading Navbar */}
+        <header className="h-14 border-b border-slate-900 flex items-center justify-between px-8 bg-slate-950/50 backdrop-blur-md">
+          <span className="text-xs font-semibold text-slate-400">Secure Orchestration Workspace</span>
+          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Backend pipeline linked" />
+        </header>
+
+        {/* Live Scrollable Message Streams */}
+        <section className="flex-1 overflow-y-auto space-y-6 p-8 scrollbar-thin max-w-4xl w-full mx-auto pb-32">
+          {messages.map((msg, idx) => (
             <div 
-              key={index} 
-              className={`flex gap-4 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              {msg.role !== "user" && (
-                <div className="h-8 w-8 rounded bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs font-bold text-slate-950 shadow-md shrink-0">
-                  AI
-                </div>
-              )}
-              
-              <div className={`max-w-2xl rounded-xl px-4 py-3 text-sm shadow-sm leading-relaxed border ${
+              key={idx} 
+              className={`flex flex-col max-w-[85%] rounded-2xl p-4 border transition-all ${
                 msg.role === "user" 
-                  ? "bg-emerald-600 text-white border-emerald-500 shadow-emerald-900/10" 
-                  : "bg-slate-800/80 text-slate-200 border-slate-700/60 backdrop-blur-sm"
-              }`}>
-                {msg.content === "" && isStreaming ? (
-                  <div className="flex items-center gap-1.5 py-1">
-                    <span className="h-1.5 w-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                    <span className="h-1.5 w-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                    <span className="h-1.5 w-1.5 bg-slate-400 rounded-full animate-bounce"></span>
-                  </div>
-                ) : (
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
-                )}
-              </div>
+                  ? "bg-blue-600/10 border-blue-500/20 ml-auto items-end rounded-tr-none" 
+                  : "bg-slate-900/40 border-slate-900 mr-auto items-start rounded-tl-none"
+              }`}
+            >
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+                {msg.role === "user" ? "User Context" : "Agent Core"}
+              </span>
 
-              {msg.role === "user" && (
-                <div className="h-8 w-8 rounded bg-slate-700 flex items-center justify-center text-xs font-medium text-slate-200 shrink-0 border border-slate-600">
-                  ME
-                </div>
-              )}
+
+
+
+              {/* ✅ NEW MARKDOWN PARSING ENGINE */}
+  <div className="text-sm leading-relaxed text-slate-200 prose prose-invert max-w-none space-y-2">
+    <ReactMarkdown
+      components={{
+        // Custom styling for code segments
+        code({ node, inline, className, children, ...props }) {
+          return (
+            <code 
+            className="bg-slate-950 text-amber-400 font-mono text-xs px-1.5 py-0.5 rounded-md border border-slate-800/60 block my-2 p-3 whitespace-pre-wrap overflow-x-auto" 
+            {...props}
+          >
+            {children}
+          </code>
+        );
+      },
+      // Custom styling for lists
+      ul: ({ children }) => <ul className="list-disc list-inside space-y-1 my-2 text-slate-300">{children}</ul>,
+      ol: ({ children }) => <ol className="list-decimal list-inside space-y-1 my-2 text-slate-300">{children}</ol>,
+      // Custom styling for headers
+      h1: ({ children }) => <h1 className="text-lg font-bold text-blue-400 mt-4 mb-1">{children}</h1>,
+      h2: ({ children }) => <h2 className="text-base font-bold text-slate-300 mt-3 mb-1">{children}</h2>,
+      h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-400 mt-2 mb-1">{children}</h3>,
+    }}
+  >
+    {msg.content}
+  </ReactMarkdown>
+</div>
+
+
             </div>
           ))}
-          <div ref={messagesEndRef} />
-        </div>
+        </section>
 
-        {/* Floating Input Controller */}
-        <div className="p-4 bg-gradient-to-t from-slate-950 to-transparent">
-          <form onSubmit={handleSubmit} className="max-w-3xl mx-auto relative group">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={isStreaming ? "Agent is processing query tools..." : "Ask your local agent a question or search live web trends..."}
-              disabled={isStreaming}
-              className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl pl-4 pr-16 py-3.5 text-sm text-slate-100 placeholder-slate-500 shadow-xl focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50"
-            />
-            <button
-              type="submit"
-              disabled={isStreaming || !input.trim()}
-              className="absolute right-2 top-1/2 -translate-y-1/2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold px-4 py-1.5 rounded-lg text-xs tracking-wide uppercase transition shadow-md"
-            >
-              Send
-            </button>
-          </form>
-          <div className="text-center text-[10px] text-slate-600 mt-2">
-            Multi-Agent Router Layer • Connected on Live Port Localhost
+        {/* BOTTOM FLOATING CONTROLS PANEL */}
+        <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-slate-950 via-slate-950/90 to-transparent">
+          <div className="max-w-4xl mx-auto w-full">
+            
+            {/* Real-time Processing Status Badges Indicator */}
+            {agentStatus && (
+              <div className="mb-3 animate-pulse flex items-center gap-2 max-w-fit px-3 py-1.5 rounded-lg border text-xs font-semibold bg-slate-900 border-slate-800 shadow-xl backdrop-blur-sm transition-all">
+                {agentStatus === "routing" && <span className="text-amber-400">🧭 Analyzing query structural context...</span>}
+                {agentStatus === "local_knowledge_search" && <span className="text-cyan-400">💾 Searching local persistent vector store (ChromaDB)...</span>}
+                {agentStatus === "live_web_search" && <span className="text-emerald-400">🌐 Executing live web discovery engine (DuckDuckGo)...</span>}
+                {agentStatus === "synthesizing" && <span className="text-purple-400">🧠 Context retrieved. Synthesizing insights...</span>}
+                {agentStatus === "error" && <span className="text-red-400">🚨 Core Routing Execution Exception Intercepted</span>}
+              </div>
+            )}
+
+            {/* Chat Input Bar Submission Line */}
+            <form onSubmit={handleSendMessage} className="flex gap-3 bg-slate-900 border border-slate-800 p-2.5 rounded-xl shadow-2xl focus-within:border-slate-700 transition-colors">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Query project records or run dynamic routing loops..."
+                className="flex-1 bg-transparent px-3 py-1.5 text-sm text-slate-200 outline-none placeholder:text-slate-500"
+                disabled={loading}
+              />
+              <button 
+                type="submit" 
+                className="bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs px-5 py-2.5 rounded-lg active:scale-[0.98] transition-all disabled:opacity-50"
+                disabled={loading || !input.trim()}
+              >
+                Send
+              </button>
+            </form>
           </div>
         </div>
-      </div>
+
+      </main>
     </div>
   );
 }

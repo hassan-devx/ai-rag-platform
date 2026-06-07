@@ -1,8 +1,8 @@
 import json
-from app.pipeline import RAGPipeline
+from app.pipeline import pipeline
 from ddgs import DDGS
 
-pipeline = RAGPipeline()
+pipeline = pipeline
 
 # --- TOOL FUNCTION EXECUTIONS ---
 
