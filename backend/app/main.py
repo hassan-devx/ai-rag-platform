@@ -1,24 +1,30 @@
+
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.pipeline import pipeline
 from app.tools import AVAILABLE_TOOLS, MAP_TOOLS
 from openai import OpenAI
 import os
 import json
 from app.auth import create_access_token, verify_token, ADMIN_PASSWORD
-
+import shutil
+import time
+import asyncio
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(
      title="TheImageBuilder Core AI Engine",
      description="Multi-agent routing backend with local RAG and live web lookups",
      version="1.0.0"
 )
-
 
 # Add CORS Middleware so your Next.js application can interact with your backend
 app.add_middleware(
@@ -30,6 +36,60 @@ app.add_middleware(
 )
 
 pipeline = pipeline
+
+
+@app.post("/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Accepts files from the frontend application, streams them securely to disk staging, 
+    and passes the file references to the advanced heavy document ingestion pipeline.
+    """
+    # 1. Basic Extension Check to keep your parsing router happy
+    allowed_extensions = {"txt", "md", "markdown", "py", "pdf", "json", "doc"}
+    file_ext = file.filename.split(".")[-1].lower() if "." in file.filename else ""
+    
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported file type .{file_ext}. Please upload code source, markdown files, or text manuals."
+        )
+
+    # 2. Build local landing destination path
+    safe_filename = os.path.basename(file.filename)
+    target_file_path = os.path.join(UPLOAD_DIR, safe_filename)
+
+    try:
+        # 3. Stream the raw uploaded file directly to disk storage (prevents RAM bloat)
+        with open(target_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write file asset to server disk: {str(e)}")
+    finally:
+        file.file.close()  # Always clear the internal file pointer handle
+
+    try:
+        # 4. Trigger your specialized multi-index text engine chunking loop!
+        pipeline.ingest_heavy_document(file_path=target_file_path, file_name=safe_filename)
+        
+        # 5. Clean up the temporary staging file from disk to keep the project clean
+        if os.path.exists(target_file_path):
+            os.remove(target_file_path)
+            
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Successfully ingested and synced '{safe_filename}' into the hybrid RAG matrix."
+            }
+        )
+        
+    except Exception as e:
+        # Clean up files if processing throws an error mid-way
+        if os.path.exists(target_file_path):
+            os.remove(target_file_path)
+        raise HTTPException(status_code=500, detail=f"RAG Matrix Ingestion Error: {str(e)}")
+
 
 class LoginRequest(BaseModel):
     password: str
@@ -54,8 +114,6 @@ async def ingest_data(data: dict):
 async def stream_chat(query: dict):
     # Your existing multi-routing agent logic lives here safely!
     return {"status": "streaming"}
-
-
 
 
 class DocumentPayload(BaseModel):
@@ -87,29 +145,45 @@ async def search_context(payload: QueryPayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ChatPayload(BaseModel):
+    prompt: str
+    session_id: str
 
-from typing import Optional
-from pydantic import BaseModel, Field
-from fastapi.responses import StreamingResponse
-
-# 1. Update the Pydantic schema keys to match the incoming payload
-class ChatRequest(BaseModel):
-    prompt: str  # ◄── Changed from 'message' to 'prompt' to match your frontend perfectly!
-    session_id: Optional[str] = Field(default="default_session")
-
-    class Config:
-        extra = "allow"
-
-# 2. Update the chat route to process the synchronized fields
 @app.post("/chat")
-async def chat_endpoint(request: ChatRequest):
-    # Pass request.prompt down into your RAG pipeline streaming engine
-    return StreamingResponse(
-        pipeline.generate_rag_response(query=request.prompt, session_id=request.session_id),
-        media_type="text/event-stream"
-    )
-   
+def chat_endpoint(payload: ChatPayload):
+    user_query = payload.prompt
+    session = payload.session_id
+    
+    print(f"Validated JSON payload successfully! Query: {user_query}")
 
+    def response_generator():
+        try:
+            # 💡 Call your master orchestration generator function
+            raw_stream = pipeline.generate_rag_response(user_query, session_id=session)
+            
+            for sse_chunk in raw_stream:
+                # sse_chunk looks like: 'data: {"text": "hello"}\n\n'
+                # Let's clean it up or forward it safely:
+                if sse_chunk.startswith("data: "):
+                    try:
+                        # Extract the raw JSON string out of the data line
+                        json_str = sse_chunk.replace("data: ", "").strip()
+                        data_dict = json.loads(json_str)
+                        text_token = data_dict.get("text", "")
+                        
+                        if text_token:
+                            yield text_token
+                    except Exception as parse_err:
+                        # If a non-JSON chunk passes through, yield it directly
+                        yield sse_chunk
+                        
+        except Exception as e:
+            error_msg = f"Pipeline execution error: {str(e)}"
+            print(f"🚨 {error_msg}")
+            yield f"X-STATUS:error {error_msg}"
+
+    return StreamingResponse(response_generator(), media_type="text/plain")
+   
 
 async def generate_rag_response(self, query: str):
         try:
@@ -151,7 +225,6 @@ async def generate_rag_response(self, query: str):
         except Exception as e:
             yield f"X-STATUS:error\n"
             yield f"Error processing pipeline: {str(e)}"
-
 
 
 @app.post("/agent")
@@ -227,9 +300,6 @@ async def run_agent_loop(payload: QueryPayload):
 
 
 
-# Ensure you import your existing token validation method
-# from .auth import verify_token 
-
 @app.post("/api/admin/ingest-file") # ◄── Clean decorator without the dependencies=[] parameter
 async def ingest_file_stream(
     file: UploadFile = File(...), 
@@ -262,8 +332,6 @@ async def ingest_file_stream(
         raise HTTPException(status_code=500, detail=f"Core file execution crash: {str(e)}")
 
 
-
-
 @app.post("/api/admin/reset-index", dependencies=[Depends(verify_token)])
 async def reset_knowledge_index():
     """Completely wipes out the local ChromaDB collection entries to clear agent memory."""
@@ -293,6 +361,23 @@ async def reset_knowledge_index():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Index clearing failure: {str(e)}")
 
+
+async def response_generator():
+        try:
+            # Execute your system query handler
+            response_text = pipeline.get_response(user_query, session_id=session)
+            
+            # 💡 PRINT THIS TO TERMINAL TO SEE THE RAW VALUE BEHIND THE NULL:
+            print(f"🚨 RAW PIPELINE OUTPUT: Value={response_text} | Type={type(response_text)}")
+            
+            if response_text is None:
+                yield "Error: Pipeline returned Python None."
+            else:
+                yield f"{response_text}"
+                
+        except Exception as e:
+            print(f"Pipeline processing execution error: {str(e)}")
+            yield f"X-STATUS:error Ingestion Pipeline Error: {str(e)}"
 
 
 if __name__ == "__main__":

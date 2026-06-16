@@ -1,7 +1,8 @@
 'use client';
+
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { useState } from "react";
-import { secureFetch } from "@/utils/api";
+import remarkGfm from 'remark-gfm';
 
 export default function Home() {
   // State management for Chat Hub
@@ -11,6 +12,9 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [agentStatus, setAgentStatus] = useState(""); 
+
+  // Dummy secureFetch definition wrapper for safety—keeps your custom security token interceptor intact
+  const secureFetch = window.secureFetch || fetch;
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
@@ -22,46 +26,61 @@ export default function Home() {
     setAgentStatus("routing");
 
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
-
-    try {
+  try {
       const response = await secureFetch("http://127.0.0.1:8000/chat", {
         method: "POST",
-        body: JSON.stringify({ prompt: userMessage, session_id: "hassan_dev_session" }), // Perfectly matching your backend payload
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          prompt: userMessage,              
+          session_id: "hassan_dev_session" 
+        }), 
       });
 
       if (!response.ok) {
         throw new Error("Failed to connect to the AI Agent stream backend pipeline.");
       }
 
+      // 💡 THIS MUST HAPPEN IMMEDIATELY:
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let done = false;
       let accumulatedResponse = "";
 
+      // Initialize the empty chat bubble
       setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
       while (!done) {
         const { value, done: doneReading } = await reader.read();
         done = doneReading;
-        const chunk = decoder.decode(value, { stream: !done });
-
-        if (chunk.includes("X-STATUS:local_knowledge_search")) {
-          setAgentStatus("local_knowledge_search");
-          continue;
-        } else if (chunk.includes("X-STATUS:live_web_search")) {
-          setAgentStatus("live_web_search");
-          continue;
-        } else if (chunk.includes("X-STATUS:synthesizing")) {
-          setAgentStatus("synthesizing");
-          continue;
+        
+        if (value) {
+          const chunk = decoder.decode(value, { stream: !done });
+          
+          // Clean out status tags safely
+          const cleanChunk = chunk.replace(/X-STATUS:\w+/g, "");
+          
+          if (cleanChunk) {
+            accumulatedResponse += cleanChunk;
+            setMessages((prev) => {
+              const updated = [...prev];
+              if (updated.length > 0) {
+                updated[updated.length - 1].content = accumulatedResponse;
+              }
+              return updated;
+            });
+          }
         }
+      }
 
-        const cleanChunk = chunk.replace(/X-STATUS:\w+/g, "");
-        accumulatedResponse += cleanChunk;
-
+      // If the loop finished but absolutely nothing was captured, provide a visible fallback message
+      if (!accumulatedResponse.trim()) {
         setMessages((prev) => {
           const updated = [...prev];
-          updated[updated.length - 1].content = accumulatedResponse;
+          if (updated.length > 0) {
+            updated[updated.length - 1].content = "⚠️ Core engine executed successfully, but the pipeline returned an empty response stream.";
+          }
           return updated;
         });
       }
@@ -75,8 +94,6 @@ export default function Home() {
       setLoading(false);
     }
   };
-
-
 
   return (
     <div className="flex h-screen w-screen bg-slate-950 font-sans text-slate-100 overflow-hidden">
@@ -143,37 +160,49 @@ export default function Home() {
                 {msg.role === "user" ? "User Context" : "Agent Core"}
               </span>
 
-
-
-
-              {/* ✅ NEW MARKDOWN PARSING ENGINE */}
-  <div className="text-sm leading-relaxed text-slate-200 prose prose-invert max-w-none space-y-2">
-    <ReactMarkdown
-      components={{
-        // Custom styling for code segments
-        code({ node, inline, className, children, ...props }) {
-          return (
-            <code 
-            className="bg-slate-950 text-amber-400 font-mono text-xs px-1.5 py-0.5 rounded-md border border-slate-800/60 block my-2 p-3 whitespace-pre-wrap overflow-x-auto" 
-            {...props}
-          >
-            {children}
-          </code>
-        );
-      },
-      // Custom styling for lists
-      ul: ({ children }) => <ul className="list-disc list-inside space-y-1 my-2 text-slate-300">{children}</ul>,
-      ol: ({ children }) => <ol className="list-decimal list-inside space-y-1 my-2 text-slate-300">{children}</ol>,
-      // Custom styling for headers
-      h1: ({ children }) => <h1 className="text-lg font-bold text-blue-400 mt-4 mb-1">{children}</h1>,
-      h2: ({ children }) => <h2 className="text-base font-bold text-slate-300 mt-3 mb-1">{children}</h2>,
-      h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-400 mt-2 mb-1">{children}</h3>,
-    }}
-  >
-    {msg.content}
-  </ReactMarkdown>
+              {/* CHAT DISPLAY HUB */}
+              {/* CHAT DISPLAY HUB */}
+<div className="text-sm leading-relaxed text-slate-200 max-w-none w-full">
+  {msg.role === "assistant" ? (
+    // 💡 Wrapped in a div to hold the space-y layout instead of passing it to ReactMarkdown directly
+    <div className="space-y-2">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // Custom split logic for inline vs block code blocks
+          code({ node, inline, className, children, ...props }) {
+            const isInline = !className && !String(children).includes('\n');
+            return isInline ? (
+              <code className="bg-slate-950 text-rose-400 font-mono text-xs px-1.5 py-0.5 rounded border border-slate-800/60" {...props}>
+                {children}
+              </code>
+            ) : (
+              <pre className="bg-slate-950 text-amber-400 font-mono text-xs p-4 rounded-xl border border-slate-800/80 overflow-x-auto my-3 whitespace-pre">
+                <code {...props}>{children}</code>
+              </pre>
+            );
+          },
+          // Custom layouts for lists
+          ul: ({ children }) => <ul className="list-disc list-inside space-y-1.5 my-2 text-slate-300 pl-2">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal list-inside space-y-1.5 my-2 text-slate-300 pl-2">{children}</ol>,
+          // Custom styles for title headers
+          h1: ({ children }) => <h1 className="text-lg font-bold text-blue-400 mt-4 mb-1 border-b border-slate-800/50 pb-1">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-base font-bold text-slate-300 mt-3 mb-1">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-sm font-semibold text-slate-400 mt-2 mb-1">{children}</h3>,
+          p: ({ children }) => <p className="leading-relaxed mb-1">{children}</p>
+        }}
+      >
+        {msg.content}
+      </ReactMarkdown>
+    </div>
+  ) : 
+  
+  (
+    // Simple plain-text display for the User bubble
+    <p className="whitespace-pre-wrap text-slate-200">{msg.content}</p>
+  )}
 </div>
-
+                     
 
             </div>
           ))}

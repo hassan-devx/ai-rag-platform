@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { secureFetch } from '@/utils/api';
+import FileUpload from '@/app/components/FileUpload';
 
 export default function DevConsole() {
   const [textInput, setTextInput] = useState('');
@@ -103,6 +104,7 @@ export default function DevConsole() {
       setLoading(false);
     }
   };
+
 
 
 
@@ -214,9 +216,18 @@ export default function DevConsole() {
               Flush Persistent ChromaDB Collection
             </button>
           </section>
+          
+          
+
+          <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-slate-200">Knowledge Base Ingestion</h2>
+              <FileUpload />
+            </section>
 
         </div>
       </main>
     </div>
   );
+
+  
 }

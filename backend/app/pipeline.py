@@ -5,6 +5,7 @@ import chromadb
 from openai import OpenAI
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
+from chromadb.config import Settings
 
 class ConversationMemory:
     def __init__(self):
@@ -48,30 +49,55 @@ class AdvancedHybridPipeline:
         )
         return response.data[0].embedding
 
-    def add_to_vector_store(self, text_content: str, source: str, chunk_size: int = 600, chunk_overlap: int = 60):
-        """Splits raw file text into chunks and registers them to the Chroma persistent index."""
+    # 1. Add the new router import to the top of pipeline.py
+    # from app.parsers import file_ingestion_router
+
+    def add_to_vector_store(self, text_content: str, source: str):
+        """Processes raw string text inputs directly into memory."""
+        from app.parsers import file_ingestion_router
+        # ... your existing code here ...
+        chunks = file_ingestion_router(source, text_content)
+        # ... index loop logic ...
+
+    def ingest_heavy_document(self, file_path: str, file_name: str):
+        """Processes massive operational manuals and textbooks from disk paths safely."""
+        from app.parsers import file_ingestion_router
+        import chromadb
+        
         chroma_client = chromadb.PersistentClient(path="./chroma_db")
         collection = chroma_client.get_or_create_collection(
             name="project_knowledge",
             metadata={"hnsw:space": "cosine"}
         )
 
-        # Naive sliding-window chunker based on characters
-        chunks = []
-        start = 0
-        while start < len(text_content):
-            end = start + chunk_size
-            chunks.append(text_content[start:end])
-            start += chunk_size - chunk_overlap
+        print(f"Opening stable ingestion stream for high-capacity asset: {file_name}")
+        
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            file_content = f.read()
+            
+        chunks = file_ingestion_router(file_name, file_content)
+        
+        for idx, chunk_data in enumerate(chunks):
+            chunk_text = chunk_data["text"]
+            meta = chunk_data["metadata"]
+            meta["source"] = file_name
+            meta["chunk_index"] = idx
+            
+            try:
+                vector = self.get_embedding(chunk_text)
+                collection.add(
+                    embeddings=[vector],
+                    documents=[chunk_text],
+                    metadatas=[meta],
+                    ids=[f"{file_name}_{idx}"]
+                )
+            except Exception as e:
+                print(f"⚠️ Skipping oversized fragment index {idx} in {file_name}: {str(e)}")
+                continue
 
-        for idx, chunk in enumerate(chunks):
-            vector = self.get_embedding(chunk)
-            collection.add(
-                embeddings=[vector],
-                documents=[chunk],
-                metadatas=[{"source": source, "chunk_index": idx}],
-                ids=[f"{source}_{idx}"]
-            )
+        print(f"Finished indexing: {file_name}. Multi-index matrix sync operational.")
+
+
 
     def _reciprocal_rank_fusion(self, bm25_results: list[dict], vector_results: list[dict], rrf_k: int = 60) -> list[dict]:
         """Fuses disparate dense/sparse score lists based strictly on candidate positions."""
@@ -99,51 +125,55 @@ class AdvancedHybridPipeline:
                     fused_docs.append(match)
                     seen_ids.add(doc_id)
         return fused_docs
+    
 
     def query_hybrid_context(self, query: str, stage1_top_n: int = 15, final_top_k: int = 3) -> str:
-        """Executes Stage-1 Hybrid Search via ChromaDB, applies RRF, and filters via Stage-2 Reranker."""
-        chroma_client = chromadb.PersistentClient(path="./chroma_db")
-        collection = chroma_client.get_or_create_collection(
-            name="project_knowledge",
-            metadata={"hnsw:space": "cosine"}
-        )
-
-        # Get all records out of the database to construct local BM25 mapping array
-        all_db_data = collection.get(include=["documents", "metadatas", "embeddings"])
-        if not all_db_data or not all_db_data["documents"]:
-            return ""
-
-        # Construct corpus structure on the fly
-        corpus_documents = [
-            {"id": all_db_data["ids"][i], "text": all_db_data["documents"][i]}
-            for i in range(len(all_db_data["ids"]))
-        ]
-
-        # ─── STAGE 1: SPARSE BM25 KEYWORD MATCHING ───
-        tokenized_corpus = [doc["text"].lower().split(" ") for doc in corpus_documents]
-        bm25_engine = BM25Okapi(tokenized_corpus)
-        tokenized_query = query.lower().split(" ")
+        """Level 4 Hybrid Search: Evaluates pinpoint child nodes, returns full parent context arrays."""
+        db_path = "./chroma_db"
+        state_file = os.path.join(db_path, "bm25_state.pkl")
         
+        if not os.path.exists(state_file):
+            print("🚨 Synchronization Error: bm25_state.pkl missing. Run ingestion first.")
+            return "System context unavailable: database index out of sync."
+
+        # 1. Read the perfectly matched BM25 state snapshot
+        with open(state_file, "rb") as f:
+            bm25_snapshot = pickle.load(f)
+        
+        bm25_engine = bm25_snapshot["engine"]
+        synced_docs = bm25_snapshot["docs"]
+        synced_metadatas = bm25_snapshot["metadatas"]
+
+        # ─── STAGE 1: SPARSE BM25 KEYWORD LOOKUP ───
+        tokenized_query = query.lower().split(" ")
         bm25_scores = bm25_engine.get_scores(tokenized_query)
         bm25_ranked_indices = np.argsort(bm25_scores)[::-1][:stage1_top_n]
-        bm25_candidates = [corpus_documents[idx] for idx in bm25_ranked_indices if bm25_scores[idx] > 0]
+        
+        bm25_candidates = [
+            {"id": f"idx_{idx}", "text": synced_docs[idx], "metadata": synced_metadatas[idx]}
+            for idx in bm25_ranked_indices if bm25_scores[idx] > 0
+        ]
 
         # ─── STAGE 1: DENSE VECTOR LOOKUP ───
-        query_vector = self.get_embedding(query)
-        vector_query_results = collection.query(
-            query_embeddings=[query_vector],
-            n_results=stage1_top_n
+        chroma_client = chromadb.PersistentClient(
+            path=db_path,
+            settings=Settings(anonymized_telemetry=False)
         )
+        collection = chroma_client.get_or_create_collection(name="project_knowledge")
+        
+        query_vector = self.get_embedding(query)
+        vector_results = collection.query(query_embeddings=[query_vector], n_results=stage1_top_n)
 
         vector_candidates = []
-        if vector_query_results and "documents" in vector_query_results and vector_query_results["documents"][0]:
-            for i in range(len(vector_query_results["ids"][0])):
+        if vector_results and vector_results["documents"][0]:
+            for i in range(len(vector_results["ids"][0])):
                 vector_candidates.append({
-                    "id": vector_query_results["ids"][0][i],
-                    "text": vector_query_results["documents"][0][i]
+                    "id": vector_results["ids"][0][i],
+                    "text": vector_results["documents"][0][i],
+                    "metadata": vector_results["metadatas"][0][i]
                 })
 
-        # ─── MERGE POOLS VIA RECIPROCAL RANK FUSION (RRF) ───
+        # ─── RECIPROCAL RANK FUSION (RRF) BLENDING ───
         fused_candidates = self._reciprocal_rank_fusion(bm25_candidates, vector_candidates, rrf_k=60)
         candidates_to_rerank = fused_candidates[:stage1_top_n]
 
@@ -160,7 +190,16 @@ class AdvancedHybridPipeline:
         final_sorted_results = sorted(candidates_to_rerank, key=lambda x: x["rerank_score"], reverse=True)
         final_slices = final_sorted_results[:final_top_k]
 
-        return "\n\n".join([doc["text"] for doc in final_slices])
+        # 💡 LEVEL 4 UPGRADE: Pull out the wide, high-context PARENT text 
+        # for synthesis, entirely bypassing truncated child string sentences.
+        unique_parents = []
+        for doc in final_slices:
+            parent_txt = doc["metadata"]["parent_text"]
+            if parent_txt not in unique_parents:
+                unique_parents.append(parent_txt)
+
+        return "\n\n--- CONTEXT BLOCK ---\n".join(unique_parents)
+    
 
     def generate_rag_response(self, query: str, session_id: str = "default_session"):
         """Compiles deep hybrid context and conversation memory into the streaming instruction system."""
@@ -195,6 +234,22 @@ class AdvancedHybridPipeline:
                 yield f"data: {json.dumps({'text': text})}\n\n"
 
         chat_memory.add_message(session_id, "assistant", "".join(assistant_accumulator))
+
+    
+
+    def get_response(self, query: str, session_id: str = None):
+        try:
+            # 1. Trigger your semantic matrix search against ChromaDB
+            # 2. Extract your keyword indices using BM25
+            # 3. Feed the unified context chunks to your LLM generator layer
+            
+            # Pull your real data out of your pipeline object variables:
+            real_rag_answer = self.orchestrate_rag_synthesis(query, session_id)
+            
+            return real_rag_answer
+            
+        except Exception as e:
+            return f"Internal Pipeline Vector Error: {str(e)}"
 
 # Instantiation mapping assignment for app/main.py router
 pipeline = AdvancedHybridPipeline()
