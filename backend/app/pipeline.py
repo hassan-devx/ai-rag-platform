@@ -6,6 +6,7 @@ from openai import OpenAI
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 from chromadb.config import Settings
+import pickle
 
 class ConversationMemory:
     def __init__(self):
