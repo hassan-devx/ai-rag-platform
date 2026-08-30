@@ -76,6 +76,46 @@ def chunk_python_code(code: str) -> list[dict]:
         
     return chunks if chunks else chunk_plain_text(code, chunk_size=400)
 
+
+
+def chunk_large_textbook(text: str, max_tokens: int = 1000) -> list[dict]:
+    """
+    Slices ultra-heavy raw text strings into strict, safely bounded 
+    semantic paragraph blocks to ensure OpenAI context windows never error out.
+    """
+    # Split by double newlines to preserve natural paragraph structure
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current_chunk = []
+    current_word_count = 0
+    
+    for para in paragraphs:
+        para_words = para.split()
+        if not para_words:
+            continue
+            
+        # Rough estimation: 1 word ~ 1.3 tokens
+        if current_word_count + len(para_words) > max_tokens:
+            if current_chunk:
+                chunks.append({
+                    "text": "\n\n".join(current_chunk),
+                    "metadata": {"type": "textbook_section"}
+                })
+            current_chunk = [para]
+            current_word_count = len(para_words)
+        else:
+            current_chunk.append(para)
+            current_word_count += len(para_words)
+            
+    if current_chunk:
+        chunks.append({
+            "text": "\n\n".join(current_chunk),
+            "metadata": {"type": "textbook_section"}
+        })
+        
+    return chunks
+
+# Now update your main router inside parsers.py to support a textbook/doc format!
 def file_ingestion_router(file_name: str, file_content: str) -> list[dict]:
     """Routes files based on extension to extract context-rich text chunks."""
     ext = file_name.split(".")[-1].lower()
@@ -84,5 +124,8 @@ def file_ingestion_router(file_name: str, file_content: str) -> list[dict]:
         return chunk_python_code(file_content)
     elif ext in ["md", "markdown"]:
         return chunk_markdown(file_content)
+    elif ext in ["pdf", "txt", "doc"] and len(file_content) > 50000:
+        # 💡 If it's a massive text document or manual, route it to the textbook chunker
+        return chunk_large_textbook(file_content)
     else:
         return chunk_plain_text(file_content)

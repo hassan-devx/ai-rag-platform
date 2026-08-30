@@ -1,0 +1,32 @@
+================================================================================
+PROJECT STATUS & ENGINEERING LOGS: my-social-app
+================================================================================
+Project Name: my-social-app
+Repository: my-social-app
+Status: Active Development
+Category: Social Networking & Full-Stack Web Platform
+
+OVERVIEW:
+my-social-app is a high-performance, full-stack social networking application 
+designed for real-time user interactions, post management, and social feeds. 
+The platform provides user authentication, post creation, commenting, 
+liking features, and follower/following graph relationships.
+
+TECHNICAL ARCHITECTURE & TECH STACK:
+- Frontend: React / Next.js with Tailwind CSS for component styling.
+- Backend API: Python (FastAPI / Flask) handling REST endpoints and routing logic.
+- Database & Persistence: PostgreSQL / MongoDB / SQLite for relational data and user profiles.
+- Vector & RAG Integrations: Document chunking and embedding storage for project updates.
+- Authentication: Secure JWT (JSON Web Tokens) with session management.
+
+RECENT UPDATES & DEVELOPMENT LOGS:
+1. Implemented user profile creation and JWT authentication flows.
+2. Built core feed component displaying real-time post streams and user metadata.
+3. Structured component architecture inside `src/components/` and `src/pages/`.
+4. Configured environment parameters for local database connection strings (`DATABASE_URL`).
+5. Added initial API service hooks for user interaction endpoints (like, comment, follow).
+
+PLANNED UPGRADES & ROADMAP:
+- Integration of real-time direct messaging via WebSockets.
+- Cloud object storage setup (AWS S3 / Cloudinary) for media and image attachments.
+- Advanced notification system for user interactions and tag updates.

@@ -7,33 +7,56 @@ pipeline = pipeline
 # --- TOOL FUNCTION EXECUTIONS ---
 
 def local_knowledge_search(query: str) -> str:
-    """Searches the local persistent ChromaDB collection for data chunks."""
-    chunks = pipeline.query_similar_context(query, max_results=3)
-    if not chunks:
-        return "No relevant local documents found."
-    return "\n---\n".join(chunks)
+    """
+    Queries the local ChromaDB vector index using correct keyword filtering
+    to avoid positional parameter parsing errors.
+    """
+    print(f"🔍 Executing local vector storage search for: '{query}'")
+    try:
+        # Assuming 'collection' is your initialized ChromaDB collection instance
+        results = collection.query(
+            query_texts=[query], 
+            n_results=3
+        )
+        
+        # Extract the documents text safely from the result mapping dict
+        if not results or not results.get('documents') or not results['documents'][0]:
+            return "No matching records found in the local database files."
+            
+        matched_chunks = results['documents'][0]
+        return "\n\n---\n\n".join(matched_chunks)
+        
+    except Exception as e:
+        print("🚨 ChromaDB/Local Search Crash Traceback:")
+        traceback.print_exc()
+        return f"Local search crashed: {str(e)}"
 
 
 def live_web_search(query: str) -> str:
-    """Queries DuckDuckGo to pull raw, real-time current event context from the live internet."""
-    # Debug print: This lets you verify in your backend terminal that the tool is actually running
+    """
+    Queries DuckDuckGo to extract raw, real-time context from the live internet.
+    Bypasses structural context managers to avoid premature client closures during SSE streaming.
+    """
     print(f"🌍 Agent is actively executing live_web_search for query: '{query}'")
     
     try:
-        with DDGS() as ddgs:
-            # Using ddgs.text with a timeout or fallback parameters
-            results = list(ddgs.text(query, max_results=3))
-            if not results:
-                return "The internet search returned no active results right now."
+        # Instantiate the client directly rather than using a 'with' block
+        ddgs = DDGS()
+        results = list(ddgs.text(query, max_results=3))
+        
+        if not results:
+            return "The live internet search returned no active results right now."
+        
+        formatted_results = []
+        for item in results:
+            formatted_results.append(f"Title: {item.get('title', 'N/A')}\nSnippet: {item.get('body', 'N/A')}")
             
-            formatted_results = []
-            for item in results:
-                formatted_results.append(f"Title: {item['title']}\nSnippet: {item['body']}")
-                
-            return "\n\n---\n\n".join(formatted_results)
+        return "\n\n---\n\n".join(formatted_results)
+        
     except Exception as e:
-        # If an IP block or connection error happens, return it explicitly so the agent knows it failed
-        return f"Internet search tool error: Could not fetch live data due to connectivity limitations. Error details: {str(e)}"
+        print("🚨 DuckDuckGo/Live Search Crash Traceback:")
+        traceback.print_exc()
+        return f"Live search crashed: {str(e)}"
 
 
 # --- OPENAI SCHEMAS DIRECTORY ---

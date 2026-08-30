@@ -6,8 +6,27 @@ from chromadb.config import Settings
 from rank_bm25 import BM25Okapi
 from app.pipeline import AdvancedHybridPipeline
 
+from pathlib import Path
+
+# Pinned to the project root directory regardless of where you run the command
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 1. Define ROOT_DIR relative to this file
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent  # Add an extra .parent if inside backend/app/
+
+# 2. Load the .env from root
+load_dotenv(ROOT_DIR / ".env")
+
+# 3. Path for ChromaDB
+DEFAULT_DB_PATH = str(ROOT_DIR / "chroma_db")
+print("Root Directory:", ROOT_DIR)
+print("Looking for .env at:", ROOT_DIR / ".env")
+print(".env exists?:", (ROOT_DIR / ".env").exists())
+
+
 class EnterpriseIngestionPipeline:
-    def __init__(self, db_path="./chroma_db", knowledge_base_path="./knowledge_base"):
+    def __init__(self, db_path=DEFAULT_DB_PATH, knowledge_base_path="./knowledge_base"):
         self.db_path = db_path
         self.knowledge_base_path = knowledge_base_path
         self.pipeline_helper = AdvancedHybridPipeline()
@@ -18,7 +37,7 @@ class EnterpriseIngestionPipeline:
             settings=Settings(anonymized_telemetry=False)
         )
         self.collection = self.chroma_client.get_or_create_collection(
-            name="project_knowledge",
+            name="knowledge_base",
             metadata={"hnsw:space": "cosine"}
         )
 
